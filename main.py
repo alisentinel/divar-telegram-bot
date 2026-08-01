@@ -95,6 +95,8 @@ def get_houses_list(data):
 
 def extract_house_data(house):
     data = house["data"]
+    payload = data["action"]["payload"]
+    web_info = payload.get("web_info", {})
 
     return {
         "title": data["title"],
@@ -103,9 +105,10 @@ def extract_house_data(house):
             for k in ("middle_description_text", "bottom_description_text")
             if data.get(k)
         ),
-        "district": data["action"]["payload"]["web_info"]["district_persian"],
-        "hasImage": data["image_count"] > 0,
-        "token": data["token"],
+        # some ads carry only a city, no district
+        "district": web_info.get("district_persian") or web_info.get("city_persian", ""),
+        "hasImage": data.get("image_count", 0) > 0,
+        "token": payload["token"],
     }
 
 
