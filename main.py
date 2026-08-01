@@ -1,4 +1,5 @@
 import datetime
+import functools
 import json
 import logging
 import os
@@ -16,7 +17,8 @@ if os.path.exists(_ENV_PATH):
                 _key, _, _value = _line.partition("=")
                 os.environ.setdefault(_key.strip(), _value.strip())
 
-URL = "https://api.divar.ir/v8/web-search/" + os.environ["SEARCH_CONDITIONS"]
+PAGE_URL = "https://divar.ir/s/" + os.environ["SEARCH_CONDITIONS"]
+API_URL = "https://api.divar.ir/v8/postlist/w/search"
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_CHATID = os.environ["BOT_CHATID"]
 
@@ -34,12 +36,50 @@ EXCLUDE_TITLE = [
 ]
 
 
+def find_key(obj, key):
+    """First value for `key` anywhere in a nested dict/list."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        children = obj.values()
+    elif isinstance(obj, list):
+        children = obj
+    else:
+        return None
+    for child in children:
+        found = find_key(child, key)
+        if found is not None:
+            return found
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def get_search_params():
+    """divar.ir/s/<conditions> renders the filters the JSON API wants; steal them."""
+    html = requests.get(
+        PAGE_URL,
+        headers={"User-Agent": "Mozilla/5.0"},
+        proxies=proxy_config,
+    ).text
+    marker = "window.__PRELOADED_STATE__ = "
+    state, _ = json.JSONDecoder().raw_decode(html[html.index(marker) + len(marker) :])
+    info = find_key(state, "search_data")
+    return find_key(state, "cities"), json.loads(info["form_data_json"])
+
+
 def get_data(page=None):
-    api_url = URL
+    cities, form_data = get_search_params()
+    body = {
+        "city_ids": cities,
+        "search_data": {"form_data": form_data},
+    }
     if page:
-        api_url += f"&page={page}"
-    response = requests.get(api_url, proxies=proxy_config)
-    return response
+        body["pagination_data"] = {
+            "@type": "type.googleapis.com/post_list.PaginationData",
+            "page": int(page),
+            "layer_page": int(page),
+        }
+    return requests.post(API_URL, json=body, proxies=proxy_config)
 
 
 def parse_data(data):
@@ -47,14 +87,9 @@ def parse_data(data):
 
 
 def get_houses_list(data):
-    # divar sometimes answers with an error/rate-limit body instead of results
-    widgets = data.get("web_widgets") or data.get("list_widgets") or {}
-    if isinstance(widgets, list):
-        return widgets
-    posts = widgets.get("post_list")
+    posts = [w for w in data.get("list_widgets", []) if w["widget_type"] == "POST_ROW"]
     if not posts:
-        logging.warning("no post_list in response: %s", str(data)[:200])
-        return []
+        logging.warning("no posts in response: %s", str(data)[:200])
     return posts
 
 
@@ -63,7 +98,11 @@ def extract_house_data(house):
 
     return {
         "title": data["title"],
-        "description": f'{data["top_description_text"]} \n {data["middle_description_text"]}',
+        "description": "\n".join(
+            data[k]
+            for k in ("middle_description_text", "bottom_description_text")
+            if data.get(k)
+        ),
         "district": data["action"]["payload"]["web_info"]["district_persian"],
         "hasImage": data["image_count"] > 0,
         "token": data["token"],
