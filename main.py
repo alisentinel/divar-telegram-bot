@@ -7,10 +7,9 @@ import time
 
 import requests
 
-URL = "https://api.divar.ir/v8/web-search/{SEARCH_CONDITIONS}".format(
-    **os.environ)
-BOT_TOKEN = "{BOT_TOKEN}".format(**os.environ)
-BOT_CHATID = "{BOT_CHATID}".format(**os.environ)
+URL = "https://api.divar.ir/v8/web-search/" + os.environ["SEARCH_CONDITIONS"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+BOT_CHATID = os.environ["BOT_CHATID"]
 
 proxy_config = {}
 if os.environ.get("HTTP_PROXY", ""):
