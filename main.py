@@ -7,6 +7,15 @@ import time
 
 import requests
 
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_ENV_PATH):
+    with open(_ENV_PATH) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _value = _line.partition("=")
+                os.environ.setdefault(_key.strip(), _value.strip())
+
 URL = "https://api.divar.ir/v8/web-search/" + os.environ["SEARCH_CONDITIONS"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_CHATID = os.environ["BOT_CHATID"]
