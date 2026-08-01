@@ -20,6 +20,11 @@ if os.environ.get("HTTPS_PROXY", ""):
 
 TOKENS = list()
 
+# comma-separated words; ads whose title contains any of them are skipped
+EXCLUDE_TITLE = [
+    w.strip() for w in os.environ.get("EXCLUDE_TITLE", "").split(",") if w.strip()
+]
+
 
 def get_data(page=None):
     api_url = URL
@@ -95,6 +100,8 @@ def process_data(data, tokens):
         if house_data is None:
             continue
         if house_data["token"] in tokens:
+            continue
+        if any(w in house_data["title"] for w in EXCLUDE_TITLE):
             continue
 
         tokens.append(house_data["token"])

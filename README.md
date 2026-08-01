@@ -39,7 +39,13 @@ And paste this here:
 URL = "https://api.divar.ir/v8/web-search/<SEARCH-CONDITIONS-HERE>"
 ```
 
-6- SSH to your server and make a cronjob to execute this code in which frequency you want.
+6- (Optional) To skip ads by title, set `EXCLUDE_TITLE` to a comma-separated list of words. Any ad whose title contains one of them is not sent:
+
+```
+EXCLUDE_TITLE=زمین,کلنگی
+```
+
+7- SSH to your server and make a cronjob to execute this code in which frequency you want.
 
 ```bash
 crontab -e
