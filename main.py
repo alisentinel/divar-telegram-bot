@@ -22,9 +22,9 @@ BOT_CHATID = os.environ["BOT_CHATID"]
 
 proxy_config = {}
 if os.environ.get("HTTP_PROXY", ""):
-    proxy_config["HTTP_PROXY"] = os.environ.get("HTTP_PROXY")
+    proxy_config["http"] = os.environ["HTTP_PROXY"]
 if os.environ.get("HTTPS_PROXY", ""):
-    proxy_config["HTTPS_PROXY"] = os.environ.get("HTTPS_PROXY")
+    proxy_config["https"] = os.environ["HTTPS_PROXY"]
 
 TOKENS = list()
 
@@ -38,7 +38,7 @@ def get_data(page=None):
     api_url = URL
     if page:
         api_url += f"&page={page}"
-    response = requests.get(api_url)
+    response = requests.get(api_url, proxies=proxy_config)
     return response
 
 
@@ -47,7 +47,15 @@ def parse_data(data):
 
 
 def get_houses_list(data):
-    return data["web_widgets"]["post_list"]
+    # divar sometimes answers with an error/rate-limit body instead of results
+    widgets = data.get("web_widgets") or data.get("list_widgets") or {}
+    if isinstance(widgets, list):
+        return widgets
+    posts = widgets.get("post_list")
+    if not posts:
+        logging.warning("no post_list in response: %s", str(data)[:200])
+        return []
+    return posts
 
 
 def extract_house_data(house):
