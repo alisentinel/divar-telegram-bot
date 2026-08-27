@@ -30,6 +30,9 @@ if os.environ.get("HTTPS_PROXY", ""):
 
 TOKENS = list()
 
+# telegram allows ~20 messages/min to a group, ~30/s overall
+SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
+
 # comma-separated words; ads whose title contains any of them are skipped
 EXCLUDE_TITLE = [
     w.strip() for w in os.environ.get("EXCLUDE_TITLE", "").split(",") if w.strip()
@@ -120,10 +123,16 @@ def send_telegram_message(house):
     text += f'<i>تصویر : </i> {"✅" if house["hasImage"] else "❌"}\n\n'
     text += f"https://divar.ir/v/a/{house['token']}"
     body = {"chat_id": BOT_CHATID, "parse_mode": "HTML", "text": text}
-    result = requests.post(url, data=body, proxies=proxy_config)
-    if result.status_code == 429:
-        time.sleep(random.randint(3, 7))
-        send_telegram_message(house)
+    for _ in range(5):
+        result = requests.post(url, data=body, proxies=proxy_config)
+        if result.status_code != 429:
+            return result.ok
+        # telegram flood wait: it tells us exactly how long to back off
+        wait = result.json().get("parameters", {}).get("retry_after", 5)
+        logging.warning("flood wait %ss", wait)
+        time.sleep(wait + random.uniform(0, 1))
+    logging.error("giving up on %s after repeated flood waits", house["token"])
+    return False
 
 
 def load_tokens():
@@ -162,9 +171,9 @@ def process_data(data, tokens):
         if any(w in house_data["title"] for w in EXCLUDE_TITLE):
             continue
 
-        tokens.append(house_data["token"])
-        send_telegram_message(house_data)
-        time.sleep(1)
+        if send_telegram_message(house_data):
+            tokens.append(house_data["token"])
+        time.sleep(SEND_INTERVAL)
     return tokens
 
 
