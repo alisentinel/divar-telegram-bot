@@ -38,6 +38,9 @@ TOKEN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tokens.j
 # telegram allows ~20 messages/min to a group, ~30/s overall
 SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
 
+# label prefixed to every ad, to tell apart bots posting to the same chat
+PRE_TEXT = os.environ.get("PRE_TEXT", "").strip()
+
 # comma-separated words; ads whose title contains any of them are skipped
 EXCLUDE_TITLE = [
     w.strip() for w in os.environ.get("EXCLUDE_TITLE", "").split(",") if w.strip()
@@ -147,7 +150,8 @@ def send_text(text, photo=None):
 
 
 def send_telegram_message(house):
-    text = f"<b>{house['title']}</b>" + "\n"
+    text = f"{PRE_TEXT}\n" if PRE_TEXT else ""
+    text += f"<b>{house['title']}</b>" + "\n"
     text += f"<i>{house['district']}</i>" + "\n"
     text += f"{house['description']}" + "\n"
     text += f"<i>تصویر : </i> {house['imageCount']}\n\n"

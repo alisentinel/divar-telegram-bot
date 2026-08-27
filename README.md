@@ -1,9 +1,15 @@
 # Divar Telegram Bot
 
+Copy `.env.sample` to `.env` and fill it in — every setting below lives there.
+
+```bash
+cp .env.sample .env
+```
+
 1- Open `@BotFather` in Telegram.
 2- Create a new bot and copy bot token. (Or use existing bot and copy bot token)
-```python
-BOT_TOKEN = '<BOT-TOKEN-HERE>'
+```
+BOT_TOKEN=<BOT-TOKEN-HERE>
 ```
 3- Send a message to `@getidsbot` and response should be something like this:
 ```text
@@ -17,8 +23,8 @@ BOT_TOKEN = '<BOT-TOKEN-HERE>'
  └ created: ~ 2/2014 (?) (https://t.me/getidsbot?start=idhelp)
 ```
 Copy `id` and paste here:
-```python
-BOT_CHATID = '<CHAT-ID-HERE>'
+```
+BOT_CHATID=<CHAT-ID-HERE>
 ```
 
 4- Open your new (or old) bot (from step 2) and press `Start` (So bot can send you messages).
@@ -35,8 +41,8 @@ Copy everything after `https://divar.ir/s/`, in this case it will be `mashhad/re
 
 And paste this here:
 
-```python
-URL = "https://api.divar.ir/v8/web-search/<SEARCH-CONDITIONS-HERE>"
+```
+SEARCH_CONDITIONS=mashhad/rent-residential/janbaz?districts=1124%2C442&credit=-100000000&rent=-3000000&size=-90
 ```
 
 6- (Optional) To skip ads by title, set `EXCLUDE_TITLE` to a comma-separated list of words. Any ad whose title contains one of them is not sent:
@@ -45,7 +51,20 @@ URL = "https://api.divar.ir/v8/web-search/<SEARCH-CONDITIONS-HERE>"
 EXCLUDE_TITLE=زمین,کلنگی
 ```
 
-7- SSH to your server and make a cronjob to execute this code in which frequency you want.
+7- (Optional) Set `PRE_TEXT` to label every message. Useful when several bots post to the same chat — HTML tags and hashtags both work:
+
+```
+PRE_TEXT=<b>#rent_mashhad</b>
+```
+Give each bot its own directory, though: they all keep their seen-ads list in `tokens.json` next to `main.py`.
+
+8- (Optional) Set `HTTP_PROXY` / `HTTPS_PROXY` if your server cannot reach Divar or Telegram directly.
+
+```
+HTTPS_PROXY=http://127.0.0.1:8080
+```
+
+9- SSH to your server and make a cronjob to execute this code in which frequency you want.
 
 ```bash
 crontab -e
