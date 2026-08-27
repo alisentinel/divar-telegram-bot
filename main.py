@@ -34,6 +34,18 @@ if os.environ.get("HTTPS_PROXY", ""):
     proxy_config["https"] = os.environ["HTTPS_PROXY"]
 
 MIN_FREE_BYTES = 1 << 20  # 1 MiB; tokens.json is a few KB
+# shown in the main table, in this order; everything else goes in the dropdown
+KEY_SPECS = (
+    "متراژ",
+    "ساخت",
+    "اتاق",
+    "متراژ زمین",
+    "نوع بنا",
+    "قیمت کل",
+    "پارکینگ",
+    "انباری",
+)
+
 MAX_PHOTOS = 10  # rich messages allow 50; an ad rarely has more than 10 useful ones
 STORAGE_WARNING_MD = "⚠️ **حافظه پر است** - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
 STORAGE_WARNING = "⚠️ <b>حافظه پر است</b> - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
@@ -204,6 +216,14 @@ def escape_markdown(text):
     return re.sub(r"([\\`*_~=|\[\]#>!+-])", r"\\\1", text)
 
 
+def spec_table(specs):
+    """Value first, label second: the message is RTL, so the label lands on the left."""
+    rows = "\n".join(
+        f"| {escape_markdown(v)} | {escape_markdown(k)} |" for k, v in specs
+    )
+    return f"| مقدار | ویژگی |\n|:---|---:|\n{rows}"
+
+
 def build_markdown(house, details):
     """One rich message: slideshow, spec table, collapsible description."""
     parts = []
@@ -217,14 +237,21 @@ def build_markdown(house, details):
         photos = "\n".join(f"![]({url})" for url in details["images"])
         parts.append(f"<tg-slideshow>\n{photos}\n</tg-slideshow>")
 
-    if details["specs"]:
-        rows = "\n".join(
-            f"| {escape_markdown(k)} | {escape_markdown(v)} |" for k, v in details["specs"]
-        )
-        parts.append(f"| ویژگی | مقدار |\n|:---|---:|\n{rows}")
+    # features have no value of their own; they read as "دارد" in the table
+    specs = details["specs"] + [(f, "دارد") for f in details["features"]]
+    key_specs = sorted(
+        (s for s in specs if s[0] in KEY_SPECS), key=lambda s: KEY_SPECS.index(s[0])
+    )
+    other_specs = [s for s in specs if s[0] not in KEY_SPECS]
 
-    if details["features"]:
-        parts.append(" · ".join(escape_markdown(f) for f in details["features"]))
+    if key_specs:
+        parts.append(spec_table(key_specs))
+    if other_specs:
+        parts.append(
+            "<details><summary>سایر مشخصات</summary>\n\n"
+            + spec_table(other_specs)
+            + "\n</details>"
+        )
 
     if details["description"]:
         body = escape_markdown(details["description"])
@@ -257,7 +284,12 @@ def telegram_call(method, body):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     body = {"chat_id": BOT_CHATID, **body}
     for _ in range(5):
-        result = requests.post(url, data=body, proxies=proxy_config)
+        try:
+            result = requests.post(url, data=body, proxies=proxy_config)
+        except requests.RequestException as err:
+            # unreachable proxy or telegram; the ad stays unsent and retries next run
+            logging.error("%s failed: %s", method, err)
+            return False
         if result.status_code == 400:
             logging.warning("%s refused: %s", method, result.text[:200])
             return None
