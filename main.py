@@ -1,4 +1,5 @@
 import datetime
+import fcntl
 import functools
 import json
 import logging
@@ -37,6 +38,9 @@ TOKEN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tokens.j
 
 # telegram allows ~20 messages/min to a group, ~30/s overall
 SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
+
+# ponytail: safety net so an empty tokens.json cannot walk divar forever
+PAGE_LIMIT = 30
 
 # label prefixed to every ad, to tell apart bots posting to the same chat
 PRE_TEXT = os.environ.get("PRE_TEXT", "").strip()
@@ -78,18 +82,14 @@ def get_search_params():
     return find_key(state, "cities"), json.loads(info["form_data_json"])
 
 
-def get_data(page=None):
+def get_data(pagination=None):
     cities, form_data = get_search_params()
     body = {
         "city_ids": cities,
         "search_data": {"form_data": form_data},
     }
-    if page:
-        body["pagination_data"] = {
-            "@type": "type.googleapis.com/post_list.PaginationData",
-            "page": int(page),
-            "layer_page": int(page),
-        }
+    if pagination:
+        body["pagination_data"] = pagination
     return requests.post(API_URL, json=body, proxies=proxy_config)
 
 
@@ -202,12 +202,34 @@ def storage_full():
     return free < MIN_FREE_BYTES
 
 
-def get_data_page(page=None):
-    data = get_data(page)
-    data = parse_data(data)
-    data = get_houses_list(data)
-    data = data[::-1]
-    return data
+def get_data_page(tokens):
+    """Walk pages, oldest ad first, until one holds an ad we already sent."""
+    houses = []
+    pagination = None
+    for _ in range(PAGE_LIMIT):
+        data = parse_data(get_data(pagination))
+        page = get_houses_list(data)
+        houses += page
+        if any(extract_house_data(h)["token"] in tokens for h in page):
+            break
+        page_info = data.get("pagination", {})
+        if not page_info.get("has_next_page"):
+            break
+        pagination = page_info["data"]
+        time.sleep(1)
+    logging.info("fetched %s ads", len(houses))
+    return houses[::-1]
+
+
+def lock_or_exit():
+    """One run at a time; the cron fires every minute but a backfill takes longer."""
+    lock = open(TOKEN_PATH + ".lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logging.info("another run is still going, skipping this one")
+        raise SystemExit(0)
+    return lock  # kept open on purpose: closing it drops the lock
 
 
 def process_data(data, tokens):
@@ -228,14 +250,12 @@ def process_data(data, tokens):
 
 if __name__ == "__main__":
     logging.info(datetime.datetime.now())
+    _lock = lock_or_exit()
     STORAGE_FULL = storage_full()
     if STORAGE_FULL:
         logging.error("disk almost full; tokens will not be saved")
     tokens = load_tokens()
     logging.info(len(tokens))
-    pages = [2, ""]
-    for page in pages:
-        data = get_data_page(page)
-        tokens = process_data(data, tokens)
+    tokens = process_data(get_data_page(tokens), tokens)
 
     save_tokns(tokens)
