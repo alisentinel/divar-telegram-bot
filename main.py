@@ -1,6 +1,7 @@
 import datetime
 import fcntl
 import functools
+import re
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ if os.path.exists(_ENV_PATH):
 SEARCH_CONDITIONS = os.environ["SEARCH_CONDITIONS"]
 PAGE_URL = "https://divar.ir/s/" + SEARCH_CONDITIONS
 API_URL = "https://api.divar.ir/v8/postlist/w/search"
+AD_URL = "https://api.divar.ir/v8/posts-v2/web/"
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_CHATID = os.environ["BOT_CHATID"]
 
@@ -32,6 +34,8 @@ if os.environ.get("HTTPS_PROXY", ""):
     proxy_config["https"] = os.environ["HTTPS_PROXY"]
 
 MIN_FREE_BYTES = 1 << 20  # 1 MiB; tokens.json is a few KB
+MAX_PHOTOS = 10  # rich messages allow 50; an ad rarely has more than 10 useful ones
+STORAGE_WARNING_MD = "⚠️ **حافظه پر است** - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
 STORAGE_WARNING = "⚠️ <b>حافظه پر است</b> - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
 STORAGE_FULL = False
 
@@ -158,21 +162,105 @@ def extract_house_data(house):
     }
 
 
-def send_text(text, photo=None):
-    method = "sendPhoto" if photo else "sendMessage"
+def iter_widgets(node):
+    """Divar nests widgets inside sections and expandable sections; flatten them."""
+    if isinstance(node, dict):
+        if "widget_type" in node:
+            yield node["widget_type"], node.get("data", {})
+        for value in node.values():
+            yield from iter_widgets(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from iter_widgets(value)
+
+
+def get_ad_details(token):
+    """The list response has one thumbnail; the ad page has every photo and spec."""
+    response = requests.get(AD_URL + token, proxies=proxy_config)
+    images, specs, features, descriptions = [], [], [], []
+    for widget_type, data in iter_widgets(parse_data(response)):
+        items = data.get("items", [])
+        if widget_type == "IMAGE_CAROUSEL":
+            images += [i["image"]["url"] for i in items if "image" in i]
+        elif widget_type == "GROUP_INFO_ROW":
+            # divar labels these itself, so any category works without a mapping
+            specs += [(i["title"], i["value"]) for i in items if i.get("value")]
+        elif widget_type == "UNEXPANDABLE_ROW" and data.get("value"):
+            specs.append((data["title"], data["value"]))
+        elif widget_type == "GROUP_FEATURE_ROW":
+            features += [i["title"] for i in items if i.get("title")]
+        elif widget_type == "DESCRIPTION_ROW":
+            descriptions.append(data.get("text", ""))
+    return {
+        "images": images[:MAX_PHOTOS],
+        "specs": specs,
+        "features": features,
+        # the first DESCRIPTION_ROW is divar's publish-date block; the ad text is longer
+        "description": max(descriptions, key=len, default=""),
+    }
+
+
+def escape_markdown(text):
+    return re.sub(r"([\\`*_~=|\[\]#>!+-])", r"\\\1", text)
+
+
+def build_markdown(house, details):
+    """One rich message: slideshow, spec table, collapsible description."""
+    parts = []
+    if PRE_TEXT:
+        parts.append(PRE_TEXT)
+    parts.append(f"## {escape_markdown(house['title'])}")
+    if house["district"]:
+        parts.append(f"*{escape_markdown(house['district'])}*")
+
+    if details["images"]:
+        photos = "\n".join(f"![]({url})" for url in details["images"])
+        parts.append(f"<tg-slideshow>\n{photos}\n</tg-slideshow>")
+
+    if details["specs"]:
+        rows = "\n".join(
+            f"| {escape_markdown(k)} | {escape_markdown(v)} |" for k, v in details["specs"]
+        )
+        parts.append(f"| ویژگی | مقدار |\n|:---|---:|\n{rows}")
+
+    if details["features"]:
+        parts.append(" · ".join(escape_markdown(f) for f in details["features"]))
+
+    if details["description"]:
+        body = escape_markdown(details["description"])
+        parts.append(f"<details><summary>توضیحات</summary>\n\n{body}\n</details>")
+
+    parts.append(f"https://divar.ir/v/a/{house['token']}")
+    if STORAGE_FULL:
+        parts.append(STORAGE_WARNING_MD)
+    return "\n\n".join(parts)
+
+
+def send_rich_message(house):
+    """Falls back to the plain photo message if divar or telegram says no."""
+    try:
+        details = get_ad_details(house["token"])
+    except (requests.RequestException, json.JSONDecodeError, KeyError) as err:
+        logging.warning("no details for %s: %s", house["token"], err)
+        return send_telegram_message(house)
+
+    rich = {"markdown": build_markdown(house, details), "is_rtl": True}
+    result = telegram_call("sendRichMessage", {"rich_message": json.dumps(rich)})
+    if result is None:
+        logging.warning("sendRichMessage rejected %s, sending a plain ad", house["token"])
+        return send_telegram_message(house)
+    return result
+
+
+def telegram_call(method, body):
+    """True/False on success or failure, None when telegram rejects the request."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-    body = {"chat_id": BOT_CHATID, "parse_mode": "HTML"}
-    if photo:
-        body["photo"] = photo
-        body["caption"] = text
-    else:
-        body["text"] = text
+    body = {"chat_id": BOT_CHATID, **body}
     for _ in range(5):
         result = requests.post(url, data=body, proxies=proxy_config)
-        if photo and result.status_code == 400:
-            # telegram could not fetch the thumbnail; the ad still matters
-            logging.warning("sendPhoto rejected %s, falling back to text", photo)
-            return send_text(text)
+        if result.status_code == 400:
+            logging.warning("%s refused: %s", method, result.text[:200])
+            return None
         if result.status_code != 429:
             return result.ok
         # telegram flood wait: it tells us exactly how long to back off
@@ -181,6 +269,19 @@ def send_text(text, photo=None):
         time.sleep(wait + random.uniform(0, 1))
     logging.error("giving up on a message after repeated flood waits")
     return False
+
+
+def send_text(text, photo=None):
+    body = {"parse_mode": "HTML"}
+    if photo:
+        body.update(photo=photo, caption=text)
+        result = telegram_call("sendPhoto", body)
+        if result is None:
+            # telegram could not fetch the thumbnail; the ad still matters
+            logging.warning("falling back to a text message")
+            return send_text(text)
+        return result
+    return telegram_call("sendMessage", {**body, "text": text}) is True
 
 
 def send_telegram_message(house):
@@ -291,7 +392,7 @@ def process_data(data, tokens):
         if any(w in house_data["title"] for w in EXCLUDE_TITLE):
             continue
 
-        if send_telegram_message(house_data):
+        if send_rich_message(house_data):
             tokens.append(house_data["token"])
         time.sleep(SEND_INTERVAL)
     return tokens
