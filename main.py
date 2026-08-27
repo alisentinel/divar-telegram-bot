@@ -28,7 +28,7 @@ if os.environ.get("HTTP_PROXY", ""):
 if os.environ.get("HTTPS_PROXY", ""):
     proxy_config["https"] = os.environ["HTTPS_PROXY"]
 
-TOKENS = list()
+TOKEN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tokens.json")
 
 # telegram allows ~20 messages/min to a group, ~30/s overall
 SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
@@ -136,20 +136,17 @@ def send_telegram_message(house):
 
 
 def load_tokens():
-    token_path = os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), "tokens.json"
-    )
-    with open(token_path, "r") as content:
-        if content == "":
-            return []
-        return json.load(content)
+    try:
+        with open(TOKEN_PATH) as content:
+            return json.load(content)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # first run, or the file was truncated by a crash mid-write
+        logging.info("starting with an empty %s", TOKEN_PATH)
+        return []
 
 
 def save_tokns(tokens):
-    token_path = os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), "tokens.json"
-    )
-    with open(token_path, "w") as outfile:
+    with open(TOKEN_PATH, "w") as outfile:
         json.dump(tokens, outfile)
 
 
