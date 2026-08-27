@@ -42,8 +42,9 @@ PARAMS_PATH = os.path.join(_HERE, "search_params.json")
 # telegram allows ~20 messages/min to a group, ~30/s overall
 SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
 
-# ponytail: safety net so an empty tokens.json cannot walk divar forever
-PAGE_LIMIT = 30
+# stop conditions for the page walk, so a cold start cannot run forever
+MAX_PAGES = int(os.environ.get("MAX_PAGES", 30))
+MAX_AGE_DAYS = float(os.environ.get("MAX_AGE_DAYS", 0))  # 0 disables the age cutoff
 
 # label prefixed to every ad, to tell apart bots posting to the same chat
 PRE_TEXT = os.environ.get("PRE_TEXT", "").strip()
@@ -235,17 +236,32 @@ def storage_full():
     return free < MIN_FREE_BYTES
 
 
+def page_too_old(page_info):
+    """Divar dates the oldest ad of the page; once that is past the cutoff, stop."""
+    last_date = page_info.get("data", {}).get("last_post_date")
+    if not MAX_AGE_DAYS or not last_date:
+        return False
+    oldest = datetime.datetime.fromisoformat(last_date.replace("Z", "+00:00"))
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=MAX_AGE_DAYS
+    )
+    return oldest < cutoff
+
+
 def get_data_page(tokens):
     """Walk pages, oldest ad first, until one holds an ad we already sent."""
     houses = []
     pagination = None
-    for _ in range(PAGE_LIMIT):
+    for _ in range(MAX_PAGES):
         data = parse_data(get_data(pagination))
         page = get_houses_list(data)
         houses += page
         if any(extract_house_data(h)["token"] in tokens for h in page):
             break
         page_info = data.get("pagination", {})
+        if page_too_old(page_info):
+            logging.info("reached ads older than %s days", MAX_AGE_DAYS)
+            break
         if not page_info.get("has_next_page"):
             break
         pagination = page_info["data"]
