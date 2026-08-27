@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import time
 
 import requests
@@ -27,6 +28,10 @@ if os.environ.get("HTTP_PROXY", ""):
     proxy_config["http"] = os.environ["HTTP_PROXY"]
 if os.environ.get("HTTPS_PROXY", ""):
     proxy_config["https"] = os.environ["HTTPS_PROXY"]
+
+MIN_FREE_BYTES = 1 << 20  # 1 MiB; tokens.json is a few KB
+STORAGE_WARNING = "⚠️ <b>حافظه پر است</b> - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
+STORAGE_FULL = False
 
 TOKEN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tokens.json")
 
@@ -115,13 +120,8 @@ def extract_house_data(house):
     }
 
 
-def send_telegram_message(house):
+def send_text(text):
     url = "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage"
-    text = f"<b>{house['title']}</b>" + "\n"
-    text += f"<i>{house['district']}</i>" + "\n"
-    text += f"{house['description']}" + "\n"
-    text += f'<i>تصویر : </i> {"✅" if house["hasImage"] else "❌"}\n\n'
-    text += f"https://divar.ir/v/a/{house['token']}"
     body = {"chat_id": BOT_CHATID, "parse_mode": "HTML", "text": text}
     for _ in range(5):
         result = requests.post(url, data=body, proxies=proxy_config)
@@ -131,8 +131,19 @@ def send_telegram_message(house):
         wait = result.json().get("parameters", {}).get("retry_after", 5)
         logging.warning("flood wait %ss", wait)
         time.sleep(wait + random.uniform(0, 1))
-    logging.error("giving up on %s after repeated flood waits", house["token"])
+    logging.error("giving up on a message after repeated flood waits")
     return False
+
+
+def send_telegram_message(house):
+    text = f"<b>{house['title']}</b>" + "\n"
+    text += f"<i>{house['district']}</i>" + "\n"
+    text += f"{house['description']}" + "\n"
+    text += f'<i>تصویر : </i> {"✅" if house["hasImage"] else "❌"}\n\n'
+    text += f"https://divar.ir/v/a/{house['token']}"
+    if STORAGE_FULL:
+        text += "\n\n" + STORAGE_WARNING
+    return send_text(text)
 
 
 def load_tokens():
@@ -146,8 +157,32 @@ def load_tokens():
 
 
 def save_tokns(tokens):
-    with open(TOKEN_PATH, "w") as outfile:
-        json.dump(tokens, outfile)
+    """Write via a temp file so a full disk leaves the old tokens.json intact."""
+    global STORAGE_FULL
+    tmp_path = TOKEN_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w") as outfile:
+            json.dump(tokens, outfile)
+            outfile.flush()
+            os.fsync(outfile.fileno())
+        os.replace(tmp_path, TOKEN_PATH)
+        return True
+    except OSError as err:
+        logging.error("could not save tokens: %s", err)
+        if not STORAGE_FULL:
+            # the free-space check missed it, so no ad carried the warning
+            STORAGE_FULL = True
+            send_text(STORAGE_WARNING)
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return False
+
+
+def storage_full():
+    free = shutil.disk_usage(os.path.dirname(TOKEN_PATH)).free
+    return free < MIN_FREE_BYTES
 
 
 def get_data_page(page=None):
@@ -176,6 +211,9 @@ def process_data(data, tokens):
 
 if __name__ == "__main__":
     logging.info(datetime.datetime.now())
+    STORAGE_FULL = storage_full()
+    if STORAGE_FULL:
+        logging.error("disk almost full; tokens will not be saved")
     tokens = load_tokens()
     logging.info(len(tokens))
     pages = [2, ""]
