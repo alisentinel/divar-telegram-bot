@@ -4,3 +4,4 @@
 __pycache__/
 *.lock
 tokens.json.tmp
+search_params.json

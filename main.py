@@ -19,7 +19,8 @@ if os.path.exists(_ENV_PATH):
                 _key, _, _value = _line.partition("=")
                 os.environ.setdefault(_key.strip(), _value.strip())
 
-PAGE_URL = "https://divar.ir/s/" + os.environ["SEARCH_CONDITIONS"]
+SEARCH_CONDITIONS = os.environ["SEARCH_CONDITIONS"]
+PAGE_URL = "https://divar.ir/s/" + SEARCH_CONDITIONS
 API_URL = "https://api.divar.ir/v8/postlist/w/search"
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_CHATID = os.environ["BOT_CHATID"]
@@ -34,7 +35,9 @@ MIN_FREE_BYTES = 1 << 20  # 1 MiB; tokens.json is a few KB
 STORAGE_WARNING = "⚠️ <b>حافظه پر است</b> - آگهی‌های ارسال‌شده ذخیره نمی‌شوند"
 STORAGE_FULL = False
 
-TOKEN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tokens.json")
+_HERE = os.path.dirname(os.path.realpath(__file__))
+TOKEN_PATH = os.path.join(_HERE, "tokens.json")
+PARAMS_PATH = os.path.join(_HERE, "search_params.json")
 
 # telegram allows ~20 messages/min to a group, ~30/s overall
 SEND_INTERVAL = 3 if BOT_CHATID.lstrip().startswith("-") else 1
@@ -68,8 +71,7 @@ def find_key(obj, key):
     return None
 
 
-@functools.lru_cache(maxsize=1)
-def get_search_params():
+def scrape_search_params():
     """divar.ir/s/<conditions> renders the filters the JSON API wants; steal them."""
     html = requests.get(
         PAGE_URL,
@@ -77,9 +79,40 @@ def get_search_params():
         proxies=proxy_config,
     ).text
     marker = "window.__PRELOADED_STATE__ = "
+    if marker not in html:
+        raise ValueError(f"no search state in {len(html)} bytes of html")
     state, _ = json.JSONDecoder().raw_decode(html[html.index(marker) + len(marker) :])
     info = find_key(state, "search_data")
-    return find_key(state, "cities"), json.loads(info["form_data_json"])
+    cities = find_key(state, "cities")
+    if not info or not cities:
+        raise ValueError("search state has no filters (divar is throttling us)")
+    return cities, json.loads(info["form_data_json"])
+
+
+@functools.lru_cache(maxsize=1)
+def get_search_params():
+    """The filters only change when SEARCH_CONDITIONS does, so scrape once and keep them."""
+    try:
+        with open(PARAMS_PATH) as cached:
+            params = json.load(cached)
+        if params["conditions"] == SEARCH_CONDITIONS:
+            return params["cities"], params["form_data"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+
+    cities, form_data = scrape_search_params()
+    with open(PARAMS_PATH, "w") as out:
+        json.dump(
+            {
+                "conditions": SEARCH_CONDITIONS,
+                "cities": cities,
+                "form_data": form_data,
+            },
+            out,
+            ensure_ascii=False,
+        )
+    logging.info("cached search filters in %s", PARAMS_PATH)
+    return cities, form_data
 
 
 def get_data(pagination=None):
