@@ -115,16 +115,27 @@ def extract_house_data(house):
         ),
         # some ads carry only a city, no district
         "district": web_info.get("district_persian") or web_info.get("city_persian", ""),
-        "hasImage": data.get("image_count", 0) > 0,
+        "imageCount": data.get("image_count", 0),
+        "imageUrl": data.get("image_url", ""),
         "token": payload["token"],
     }
 
 
-def send_text(text):
-    url = "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage"
-    body = {"chat_id": BOT_CHATID, "parse_mode": "HTML", "text": text}
+def send_text(text, photo=None):
+    method = "sendPhoto" if photo else "sendMessage"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    body = {"chat_id": BOT_CHATID, "parse_mode": "HTML"}
+    if photo:
+        body["photo"] = photo
+        body["caption"] = text
+    else:
+        body["text"] = text
     for _ in range(5):
         result = requests.post(url, data=body, proxies=proxy_config)
+        if photo and result.status_code == 400:
+            # telegram could not fetch the thumbnail; the ad still matters
+            logging.warning("sendPhoto rejected %s, falling back to text", photo)
+            return send_text(text)
         if result.status_code != 429:
             return result.ok
         # telegram flood wait: it tells us exactly how long to back off
@@ -139,11 +150,13 @@ def send_telegram_message(house):
     text = f"<b>{house['title']}</b>" + "\n"
     text += f"<i>{house['district']}</i>" + "\n"
     text += f"{house['description']}" + "\n"
-    text += f'<i>تصویر : </i> {"✅" if house["hasImage"] else "❌"}\n\n'
+    text += f"<i>تصویر : </i> {house['imageCount']}\n\n"
     text += f"https://divar.ir/v/a/{house['token']}"
     if STORAGE_FULL:
         text += "\n\n" + STORAGE_WARNING
-    return send_text(text)
+    # captions cap at 1024 chars; text messages get 4096
+    photo = house["imageUrl"] if house["imageCount"] and len(text) <= 1024 else None
+    return send_text(text, photo)
 
 
 def load_tokens():
