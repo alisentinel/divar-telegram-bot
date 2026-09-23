@@ -42,7 +42,9 @@ KEY_SPECS = (
     "متراژ زمین",
     "نوع بنا",
     "قیمت کل",
+    "وام",
     "پارکینگ",
+    "آسانسور",
     "انباری",
 )
 
@@ -200,7 +202,7 @@ def get_ad_details(token):
         elif widget_type == "UNEXPANDABLE_ROW" and data.get("value"):
             specs.append((data["title"], data["value"]))
         elif widget_type == "GROUP_FEATURE_ROW":
-            features += [i["title"] for i in items if i.get("title")]
+            features += [feature_spec(i) for i in items if i.get("title")]
         elif widget_type == "DESCRIPTION_ROW":
             descriptions.append(data.get("text", ""))
     return {
@@ -210,6 +212,15 @@ def get_ad_details(token):
         # the first DESCRIPTION_ROW is divar's publish-date block; the ad text is longer
         "description": max(descriptions, key=len, default=""),
     }
+
+
+def feature_spec(item):
+    """A feature carries no value of its own: `available` is false when the ad lacks
+    it, and divar sometimes bakes the negation into the title instead."""
+    title = item["title"]
+    stripped = re.sub(r"\s*(ن?دارد)$", "", title)
+    has = item.get("available", True) and not title.endswith("ندارد")
+    return stripped, "دارد" if has else "ندارد"
 
 
 def escape_markdown(text):
@@ -237,8 +248,7 @@ def build_markdown(house, details):
         photos = "\n".join(f"![]({url})" for url in details["images"])
         parts.append(f"<tg-slideshow>\n{photos}\n</tg-slideshow>")
 
-    # features have no value of their own; they read as "دارد" in the table
-    specs = details["specs"] + [(f, "دارد") for f in details["features"]]
+    specs = details["specs"] + details["features"]
     key_specs = sorted(
         (s for s in specs if s[0] in KEY_SPECS), key=lambda s: KEY_SPECS.index(s[0])
     )
